@@ -1,146 +1,180 @@
-// Unity built-in shader source. Copyright (c) 2016 Unity Technologies. MIT license (see license.txt)
+Shader "Universal Render Pipeline/Terrain/Painted"
+{
+    Properties
+    {
+        _Radius("Radius", Range(0.0, 10.0)) = 0.0
 
-Shader "Nature/Terrain/Painted" {
-    Properties {
-        [HideInInspector] _Control ("Control (RGBA)", 2D) = "red" {}
-        [HideInInspector] _Splat3 ("Layer 3 (A)", 2D) = "white" {}
-        [HideInInspector] _Splat2 ("Layer 2 (B)", 2D) = "white" {}
-        [HideInInspector] _Splat1 ("Layer 1 (G)", 2D) = "white" {}
-        [HideInInspector] _Splat0 ("Layer 0 (R)", 2D) = "white" {}
-        [HideInInspector] _Normal3 ("Normal 3 (A)", 2D) = "bump" {}
-        [HideInInspector] _Normal2 ("Normal 2 (B)", 2D) = "bump" {}
-        [HideInInspector] _Normal1 ("Normal 1 (G)", 2D) = "bump" {}
-        [HideInInspector] _Normal0 ("Normal 0 (R)", 2D) = "bump" {}
+        [HideInInspector] [ToggleUI] _EnableHeightBlend("EnableHeightBlend", Float) = 0.0
+        _HeightTransition("Height Transition", Range(0, 1.0)) = 0.0
+        // Layer count is passed down to guide height-blend enable/disable, due
+        // to the fact that heigh-based blend will be broken with multipass.
+        [HideInInspector] [PerRendererData] _NumLayersCount ("Total Layer Count", Float) = 1.0
+    
+        // set by terrain engine
+        [HideInInspector] _Control("Control (RGBA)", 2D) = "red" {}
+        [HideInInspector] _Splat3("Layer 3 (A)", 2D) = "grey" {}
+        [HideInInspector] _Splat2("Layer 2 (B)", 2D) = "grey" {}
+        [HideInInspector] _Splat1("Layer 1 (G)", 2D) = "grey" {}
+        [HideInInspector] _Splat0("Layer 0 (R)", 2D) = "grey" {}
+        [HideInInspector] _Normal3("Normal 3 (A)", 2D) = "bump" {}
+        [HideInInspector] _Normal2("Normal 2 (B)", 2D) = "bump" {}
+        [HideInInspector] _Normal1("Normal 1 (G)", 2D) = "bump" {}
+        [HideInInspector] _Normal0("Normal 0 (R)", 2D) = "bump" {}
+        [HideInInspector] _Mask3("Mask 3 (A)", 2D) = "grey" {}
+        [HideInInspector] _Mask2("Mask 2 (B)", 2D) = "grey" {}
+        [HideInInspector] _Mask1("Mask 1 (G)", 2D) = "grey" {}
+        [HideInInspector] _Mask0("Mask 0 (R)", 2D) = "grey" {}
+        [HideInInspector][Gamma] _Metallic0("Metallic 0", Range(0.0, 1.0)) = 0.0
+        [HideInInspector][Gamma] _Metallic1("Metallic 1", Range(0.0, 1.0)) = 0.0
+        [HideInInspector][Gamma] _Metallic2("Metallic 2", Range(0.0, 1.0)) = 0.0
+        [HideInInspector][Gamma] _Metallic3("Metallic 3", Range(0.0, 1.0)) = 0.0
+        [HideInInspector] _Smoothness0("Smoothness 0", Range(0.0, 1.0)) = 0.5
+        [HideInInspector] _Smoothness1("Smoothness 1", Range(0.0, 1.0)) = 0.5
+        [HideInInspector] _Smoothness2("Smoothness 2", Range(0.0, 1.0)) = 0.5
+        [HideInInspector] _Smoothness3("Smoothness 3", Range(0.0, 1.0)) = 0.5
+
         // used in fallback on old cards & base map
-        [HideInInspector] _MainTex ("BaseMap (RGB)", 2D) = "white" {}
-        [HideInInspector] _Color ("Main Color", Color) = (1,1,1,1)
-        _Radius("Radius", Range(0, 10)) = 0
+        [HideInInspector] _MainTex("BaseMap (RGB)", 2D) = "grey" {}
+        [HideInInspector] _BaseColor("Main Color", Color) = (1,1,1,1)
+
+        [HideInInspector] _TerrainHolesTexture("Holes Map (RGB)", 2D) = "white" {}
+
+        [ToggleUI] _EnableInstancedPerPixelNormal("Enable Instanced per-pixel normal", Float) = 1.0
     }
 
-    CGINCLUDE
-    #pragma surface surf Lambert vertex:SplatmapVert finalcolor:SplatmapFinalColor finalprepass:SplatmapFinalPrepass finalgbuffer:SplatmapFinalGBuffer noinstancing
-    #pragma multi_compile_fog
-    #include "TerrainSplatmapCommon.cginc"
+    HLSLINCLUDE
 
-    uniform int _Radius;
-    float4 _Splat0_TexelSize;
-    float4 _Splat1_TexelSize;
-    float4 _Splat2_TexelSize;
-    float4 _Splat3_TexelSize;
+    #pragma multi_compile __ _ALPHATEST_ON
 
-    fixed4 PaintedPixel(sampler2D tex, half4 texelSize, half2 uv)
+    ENDHLSL
+
+    SubShader
     {
-        float3 mean[4] = {
-            {0, 0, 0},
-            {0, 0, 0},
-            {0, 0, 0},
-            {0, 0, 0}
-        };
+        Tags { "Queue" = "Geometry-100" "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" "IgnoreProjector" = "False"}
 
-        float3 sigma[4] = {
-            {0, 0, 0},
-            {0, 0, 0},
-            {0, 0, 0},
-            {0, 0, 0}
-        };
-
-        float2 start[4] = {{-_Radius, -_Radius}, {-_Radius, 0}, {0, -_Radius}, {0, 0}};
-
-        float2 pos;
-        float3 col;
-        for (int k = 0; k < 4; k++) {
-            for (int i = 0; i <= _Radius; i++) {
-                for (int j = 0; j <= _Radius; j++) {
-                    pos = float2(i, j) + start[k];
-                    col = tex2Dlod(tex, float4(uv + float2(pos.x * texelSize.x, pos.y * texelSize.y), 0., 0.)).rgb;
-                    mean[k] += col;
-                    sigma[k] += col * col;
-                }
-            }
-        }
-
-        float sigma2;
-
-        float n = pow(_Radius + 1, 2);
-        float4 color = tex2D(tex, uv);
-        float min = 1;
-
-        for (int l = 0; l < 4; l++) {
-            mean[l] /= n;
-            sigma[l] = abs(sigma[l] / n - mean[l] * mean[l]);
-            sigma2 = sigma[l].r + sigma[l].g + sigma[l].b;
-
-            if (sigma2 < min) {
-                min = sigma2;
-                color.rgb = mean[l].rgb;
-            }
-        }
-        return color;
-    }
-
-    void PaintedMix(Input IN, out half4 splat_control, out half weight, out fixed4 mixedDiffuse, inout fixed3 mixedNormal)
-    {
-        // adjust splatUVs so the edges of the terrain tile lie on pixel centers
-        float2 splatUV = (IN.tc.xy * (_Control_TexelSize.zw - 1.0f) + 0.5f) * _Control_TexelSize.xy;
-        splat_control = tex2D(_Control, splatUV);
-        weight = dot(splat_control, half4(1,1,1,1));
-
-        #if !defined(SHADER_API_MOBILE) && defined(TERRAIN_SPLAT_ADDPASS)
-            clip(weight == 0.0f ? -1 : 1);
-        #endif
-
-        // Normalize weights before lighting and restore weights in final modifier functions so that the overal
-        // lighting result can be correctly weighted.
-        splat_control /= (weight + 1e-3f);
-
-        float2 uvSplat0 = TRANSFORM_TEX(IN.tc.xy, _Splat0);
-        float2 uvSplat1 = TRANSFORM_TEX(IN.tc.xy, _Splat1);
-        float2 uvSplat2 = TRANSFORM_TEX(IN.tc.xy, _Splat2);
-        float2 uvSplat3 = TRANSFORM_TEX(IN.tc.xy, _Splat3);
-
-        mixedDiffuse = 0.0f;
-        mixedDiffuse += splat_control.r * PaintedPixel(_Splat0, _Splat0_TexelSize, uvSplat0);
-        mixedDiffuse += splat_control.g * PaintedPixel(_Splat1, _Splat1_TexelSize, uvSplat1);
-        mixedDiffuse += splat_control.b * PaintedPixel(_Splat2, _Splat2_TexelSize, uvSplat2);
-        mixedDiffuse += splat_control.a * PaintedPixel(_Splat3, _Splat3_TexelSize, uvSplat3);
-    }
-
-    void surf(Input IN, inout SurfaceOutput o)
-    {
-        half4 splat_control;
-        half weight;
-        fixed4 mixedDiffuse;
-        PaintedMix(IN, splat_control, weight, mixedDiffuse, o.Normal);
-        o.Albedo = mixedDiffuse.rgb;
-        o.Alpha = weight;
-    }
-    ENDCG
-
-    Category {
-        Tags {
-            "Queue" = "Geometry-99"
-            "RenderType" = "Opaque"
-        }
-        // TODO: Seems like "#pragma target 3.0 _TERRAIN_NORMAL_MAP" can't fallback correctly on less capable devices?
-        // Use two sub-shaders to simulate different features for different targets and still fallback correctly.
-        SubShader { // for sm3.0+ targets
-            CGPROGRAM
+        Pass
+        {
+            Name "ForwardLit"
+            Tags { "LightMode" = "UniversalForward" }
+            HLSLPROGRAM
+            // Required to compile gles 2.0 with standard srp library
+            #pragma prefer_hlslcc gles
+            #pragma exclude_renderers d3d11_9x
             #pragma target 3.0
-            #pragma multi_compile __ _TERRAIN_NORMAL_MAP
-            ENDCG
+
+            #pragma vertex SplatmapVert
+            #pragma fragment SplatmapFragment
+
+            #define _METALLICSPECGLOSSMAP 1
+            #define _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A 1
+
+            // -------------------------------------
+            // Universal Pipeline keywords
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS_CASCADE
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
+            #pragma multi_compile _ _SHADOWS_SOFT
+            #pragma multi_compile _ _MIXED_LIGHTING_SUBTRACTIVE
+
+            // -------------------------------------
+            // Unity defined keywords
+            #pragma multi_compile _ DIRLIGHTMAP_COMBINED
+            #pragma multi_compile _ LIGHTMAP_ON
+            #pragma multi_compile_fog
+            #pragma multi_compile_instancing
+            #pragma instancing_options assumeuniformscaling nomatrices nolightprobe nolightmap
+
+            #pragma shader_feature_local _TERRAIN_BLEND_HEIGHT
+            #pragma shader_feature_local _NORMALMAP
+            #pragma shader_feature_local _MASKMAP            
+            // Sample normal in pixel shader when doing instancing
+            #pragma shader_feature_local _TERRAIN_INSTANCED_PERPIXEL_NORMAL
+
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/Terrain/TerrainLitInput.hlsl"
+            #include "Assets/PaintedTerrain/Shader/TerrainPaintedPasses.hlsl"
+            ENDHLSL
         }
-        SubShader { // for sm2.0 targets
-            CGPROGRAM
-            ENDCG
+
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags{"LightMode" = "ShadowCaster"}
+
+            ZWrite On
+
+            HLSLPROGRAM
+            // Required to compile gles 2.0 with standard srp library
+            #pragma prefer_hlslcc gles
+            #pragma exclude_renderers d3d11_9x
+            #pragma target 2.0
+
+            #pragma vertex ShadowPassVertex
+            #pragma fragment ShadowPassFragment
+
+            #pragma multi_compile_instancing
+            #pragma instancing_options assumeuniformscaling nomatrices nolightprobe nolightmap
+
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/Terrain/TerrainLitInput.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/Terrain/TerrainLitPasses.hlsl"
+            ENDHLSL
         }
+
+        Pass
+        {
+            Name "DepthOnly"
+            Tags{"LightMode" = "DepthOnly"}
+
+            ZWrite On
+            ColorMask 0
+
+            HLSLPROGRAM
+            // Required to compile gles 2.0 with standard srp library
+            #pragma prefer_hlslcc gles
+            #pragma exclude_renderers d3d11_9x
+            #pragma target 2.0
+
+            #pragma vertex DepthOnlyVertex
+            #pragma fragment DepthOnlyFragment
+
+            #pragma multi_compile_instancing
+            #pragma instancing_options assumeuniformscaling nomatrices nolightprobe nolightmap
+
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/Terrain/TerrainLitInput.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/Terrain/TerrainLitPasses.hlsl"
+            ENDHLSL
+        }
+
+        Pass
+        {
+            Name "SceneSelectionPass"
+            Tags { "LightMode" = "SceneSelectionPass" }
+
+            HLSLPROGRAM
+            // Required to compile gles 2.0 with standard srp library
+            #pragma prefer_hlslcc gles
+            #pragma exclude_renderers d3d11_9x
+            #pragma target 2.0
+
+            #pragma vertex DepthOnlyVertex
+            #pragma fragment DepthOnlyFragment
+
+            #pragma multi_compile_instancing
+            #pragma instancing_options assumeuniformscaling nomatrices nolightprobe nolightmap
+
+            #define SCENESELECTIONPASS
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/Terrain/TerrainLitInput.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/Terrain/TerrainLitPasses.hlsl"
+            ENDHLSL
+        }
+
+        UsePass "Hidden/Nature/Terrain/Utilities/PICKING"
     }
+    Dependency "AddPassShader" = "Hidden/Universal Render Pipeline/Terrain/Lit (Add Pass)"
+    Dependency "BaseMapShader" = "Hidden/Universal Render Pipeline/Terrain/Lit (Base Pass)"
+    Dependency "BaseMapGenShader" = "Hidden/Universal Render Pipeline/Terrain/Lit (Basemap Gen)"
+    
+    //CustomEditor "UnityEditor.Rendering.Universal.TerrainLitShaderGUI"
 
-    Dependency "AddPassShader" = "Hidden/TerrainEngine/Splatmap/Diffuse-AddPass"
-    Dependency "BaseMapShader" = "Diffuse"
-    Dependency "Details0"      = "Hidden/TerrainEngine/Details/Vertexlit"
-    Dependency "Details1"      = "Hidden/TerrainEngine/Details/WavingDoublePass"
-    Dependency "Details2"      = "Hidden/TerrainEngine/Details/BillboardWavingDoublePass"
-    Dependency "Tree0"         = "Hidden/TerrainEngine/BillboardTree"
-
-    Fallback "Diffuse"
+    Fallback "Hidden/Universal Render Pipeline/FallbackError"
 }
