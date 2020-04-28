@@ -18,95 +18,102 @@ Shader "Nature/Terrain/Painted" {
     }
 
     CGINCLUDE
-        #pragma surface surf Lambert vertex:SplatmapVert finalcolor:SplatmapFinalColor finalprepass:SplatmapFinalPrepass finalgbuffer:SplatmapFinalGBuffer noinstancing
-        #pragma multi_compile_fog
-        #include "TerrainSplatmapCommon.cginc"
+    #pragma surface surf Lambert vertex:SplatmapVert finalcolor:SplatmapFinalColor finalprepass:SplatmapFinalPrepass finalgbuffer:SplatmapFinalGBuffer noinstancing
+    #pragma multi_compile_fog
+    #include "TerrainSplatmapCommon.cginc"
 
-        uniform int _Radius;
-        float4 _Splat0_TexelSize;
-        float4 _Splat1_TexelSize;
-        float4 _Splat2_TexelSize;
-        float4 _Splat3_TexelSize;
+    uniform int _Radius;
+    float4 _Splat0_TexelSize;
+    float4 _Splat1_TexelSize;
+    float4 _Splat2_TexelSize;
+    float4 _Splat3_TexelSize;
 
-        fixed4 PaintedPixel(sampler2D tex, half4 texelSize, half2 uv)
-        {
-            float3 mean[4] = {
-                {0, 0, 0},
-                {0, 0, 0},
-                {0, 0, 0},
-                {0, 0, 0}
-            };
+    fixed4 PaintedPixel(sampler2D tex, half4 texelSize, half2 uv)
+    {
+        float3 mean[4] = {
+            {0, 0, 0},
+            {0, 0, 0},
+            {0, 0, 0},
+            {0, 0, 0}
+        };
 
-            float3 sigma[4] = {
-                {0, 0, 0},
-                {0, 0, 0},
-                {0, 0, 0},
-                {0, 0, 0}
-            };
+        float3 sigma[4] = {
+            {0, 0, 0},
+            {0, 0, 0},
+            {0, 0, 0},
+            {0, 0, 0}
+        };
 
-            float2 start[4] = {{-_Radius, -_Radius}, {-_Radius, 0}, {0, -_Radius}, {0, 0}};
+        float2 start[4] = {{-_Radius, -_Radius}, {-_Radius, 0}, {0, -_Radius}, {0, 0}};
 
-            float2 pos;
-            float3 col;
-            for (int k = 0; k < 4; k++) {
-                for (int i = 0; i <= _Radius; i++) {
-                    for (int j = 0; j <= _Radius; j++) {
-                        pos = float2(i, j) + start[k];
-                        col = tex2Dlod(tex, float4(uv + float2(pos.x * texelSize.x, pos.y * texelSize.y), 0., 0.)).rgb;
-                        mean[k] += col;
-                        sigma[k] += col * col;
-                    }
+        float2 pos;
+        float3 col;
+        for (int k = 0; k < 4; k++) {
+            for (int i = 0; i <= _Radius; i++) {
+                for (int j = 0; j <= _Radius; j++) {
+                    pos = float2(i, j) + start[k];
+                    col = tex2Dlod(tex, float4(uv + float2(pos.x * texelSize.x, pos.y * texelSize.y), 0., 0.)).rgb;
+                    mean[k] += col;
+                    sigma[k] += col * col;
                 }
             }
+        }
 
-            float sigma2;
+        float sigma2;
 
-            float n = pow(_Radius + 1, 2);
-            float4 color = tex2D(tex, uv);
-            float min = 1;
+        float n = pow(_Radius + 1, 2);
+        float4 color = tex2D(tex, uv);
+        float min = 1;
 
-            for (int l = 0; l < 4; l++) {
-                mean[l] /= n;
-                sigma[l] = abs(sigma[l] / n - mean[l] * mean[l]);
-                sigma2 = sigma[l].r + sigma[l].g + sigma[l].b;
+        for (int l = 0; l < 4; l++) {
+            mean[l] /= n;
+            sigma[l] = abs(sigma[l] / n - mean[l] * mean[l]);
+            sigma2 = sigma[l].r + sigma[l].g + sigma[l].b;
 
-                if (sigma2 < min) {
-                    min = sigma2;
-                    color.rgb = mean[l].rgb;
-                }
+            if (sigma2 < min) {
+                min = sigma2;
+                color.rgb = mean[l].rgb;
             }
-            return color;
         }
+        return color;
+    }
 
-        void PaintedMix(Input IN, out half4 splat_control, out half weight, out fixed4 mixedDiffuse, inout fixed3 mixedNormal)
-        {
-            splat_control = tex2D(_Control, IN.tc_Control);
-            weight = dot(splat_control, half4(1,1,1,1));
+    void PaintedMix(Input IN, out half4 splat_control, out half weight, out fixed4 mixedDiffuse, inout fixed3 mixedNormal)
+    {
+        // adjust splatUVs so the edges of the terrain tile lie on pixel centers
+        float2 splatUV = (IN.tc.xy * (_Control_TexelSize.zw - 1.0f) + 0.5f) * _Control_TexelSize.xy;
+        splat_control = tex2D(_Control, splatUV);
+        weight = dot(splat_control, half4(1,1,1,1));
 
-            #if !defined(SHADER_API_MOBILE) && defined(TERRAIN_SPLAT_ADDPASS)
-                clip(weight == 0.0f ? -1 : 1);
-            #endif
+        #if !defined(SHADER_API_MOBILE) && defined(TERRAIN_SPLAT_ADDPASS)
+            clip(weight == 0.0f ? -1 : 1);
+        #endif
 
-            // Normalize weights before lighting and restore weights in final modifier functions so that the overal
-            // lighting result can be correctly weighted.
-            splat_control /= (weight + 1e-3f);
+        // Normalize weights before lighting and restore weights in final modifier functions so that the overal
+        // lighting result can be correctly weighted.
+        splat_control /= (weight + 1e-3f);
 
-            mixedDiffuse = 0.0f;
-            mixedDiffuse += splat_control.r * PaintedPixel(_Splat0, _Splat0_TexelSize, IN.uv_Splat0);
-            mixedDiffuse += splat_control.g * PaintedPixel(_Splat1, _Splat1_TexelSize, IN.uv_Splat1);
-            mixedDiffuse += splat_control.b * PaintedPixel(_Splat2, _Splat2_TexelSize, IN.uv_Splat2);
-            mixedDiffuse += splat_control.a * PaintedPixel(_Splat3, _Splat3_TexelSize, IN.uv_Splat3);
-        }
+        float2 uvSplat0 = TRANSFORM_TEX(IN.tc.xy, _Splat0);
+        float2 uvSplat1 = TRANSFORM_TEX(IN.tc.xy, _Splat1);
+        float2 uvSplat2 = TRANSFORM_TEX(IN.tc.xy, _Splat2);
+        float2 uvSplat3 = TRANSFORM_TEX(IN.tc.xy, _Splat3);
 
-        void surf(Input IN, inout SurfaceOutput o)
-        {
-            half4 splat_control;
-            half weight;
-            fixed4 mixedDiffuse;
-            PaintedMix(IN, splat_control, weight, mixedDiffuse, o.Normal);
-            o.Albedo = mixedDiffuse.rgb;
-            o.Alpha = weight;
-        }
+        mixedDiffuse = 0.0f;
+        mixedDiffuse += splat_control.r * PaintedPixel(_Splat0, _Splat0_TexelSize, uvSplat0);
+        mixedDiffuse += splat_control.g * PaintedPixel(_Splat1, _Splat1_TexelSize, uvSplat1);
+        mixedDiffuse += splat_control.b * PaintedPixel(_Splat2, _Splat2_TexelSize, uvSplat2);
+        mixedDiffuse += splat_control.a * PaintedPixel(_Splat3, _Splat3_TexelSize, uvSplat3);
+    }
+
+    void surf(Input IN, inout SurfaceOutput o)
+    {
+        half4 splat_control;
+        half weight;
+        fixed4 mixedDiffuse;
+        PaintedMix(IN, splat_control, weight, mixedDiffuse, o.Normal);
+        o.Albedo = mixedDiffuse.rgb;
+        o.Alpha = weight;
+    }
     ENDCG
 
     Category {
@@ -118,8 +125,8 @@ Shader "Nature/Terrain/Painted" {
         // Use two sub-shaders to simulate different features for different targets and still fallback correctly.
         SubShader { // for sm3.0+ targets
             CGPROGRAM
-                #pragma target 3.0
-                #pragma multi_compile __ _TERRAIN_NORMAL_MAP
+            #pragma target 3.0
+            #pragma multi_compile __ _TERRAIN_NORMAL_MAP
             ENDCG
         }
         SubShader { // for sm2.0 targets
